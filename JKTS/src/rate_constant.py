@@ -7,7 +7,7 @@ from classes import Molecule
 
 
 def eckart(SP_TS, SP_reactant, SP_product, imag, T=[298.15]):
-    from numpy import pi, sqrt, arange, exp, max, cosh
+    from numpy import pi, sqrt, arange, exp, max, cosh, isfinite
 
     def Gcalc(Emin, GSize, V, A, B, L, h, kB, m, T, v1):
         E = arange(Emin, 2*max(V), GSize)
@@ -43,10 +43,16 @@ def eckart(SP_TS, SP_reactant, SP_product, imag, T=[298.15]):
         kB = 3.1668152e-6
         h = 2*pi
         Na = 6.0221409e+23
+        mu = 1
+        min_barrier = 1e-4
 
         E1 = SP_TS - SP_reactant
         E2 = SP_TS - SP_product
-        mu = 1
+        
+        if E1 < min_barrier or E2 < min_barrier:
+            logger.warning(f"Eckart tunneling calculation failed: barrier too low E1={E1:4g}, E2={E2:4g} kcal/mol (TS not above reactant/product). Returning tunneling coefficient 1")
+            return 1
+
         v1 = ((E1*4184)/Na)/4.3597447222071e-18
         v2 = ((E2*4184)/Na)/4.3597447222071e-18
         wau = (imag*100)*c*2.418884326509e-17
@@ -56,7 +62,14 @@ def eckart(SP_TS, SP_reactant, SP_product, imag, T=[298.15]):
         F2 = -4*(pi**2)*(wau**2)*1
         A = v1-v2
         B = (sqrt(v2)+sqrt(v1))**2
+        radicand = -2*F*B
+        if radicand <= 0:
+            logger.warning(f"Eckart tunneling calculation failed: negative radicand {radicand} in L calculation. Returning tunneling coefficient 1")
+            return 1
         L = -pi*(A-B)*(B+A)/(sqrt(-2*F*B)*B)
+        if not isfinite(L) or L <= 0:
+            logger.warning(f"Eckart tunneling calculation failed: non-positive L={L}. Returning tunneling coefficient 1")
+            return 1
 
         x = arange(-3, 3, 0.01)
         x = x/(sqrt(mu))
@@ -94,6 +107,9 @@ def eckart(SP_TS, SP_reactant, SP_product, imag, T=[298.15]):
         [G, EKa, K, GK] = Gcalc(Emin, GSize, V, A, B, L, h, kB, m, T, v1)
 
         kappa = G[0]
+        if not isfinite(kappa) or kappa < 1 - 1e-6:
+            logger.warning(f"Eckart tunneling calculation failed: non-positive kappa={kappa}. Returning tunneling coefficient 1")
+            return 1
         return kappa
     except Exception as e:
         logger.warning(f"Error calculating the Eckart tunneling ({e}). Returning tunneling coefficient 1")
