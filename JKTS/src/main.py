@@ -12,7 +12,7 @@ from metadata import guard_monitor_pid, restore_settings, update_metadata
 from output import logger, banner
 from qc_input import mkdir
 from monitoring import handle_termination, handle_input_molecules
-from rate_constant import rate_constant, assemble_and_record_rate, read_reaction_path_degeneracy
+from rate_constant import rate_constant, assemble_and_record_rate, read_reaction_path_degeneracy, crest_failure_note, radical_name
 from results import record_rate, write_molecule_summary, format_rate
 
 
@@ -299,8 +299,13 @@ def main():
         if final_TS and final_reactants:
             symmetry = read_reaction_path_degeneracy(runtime.start_dir)
             result = rate_constant(final_TS, final_reactants, final_products, T=runtime.args.T, symmetry=symmetry)
+            note = crest_failure_note(final_TS)
             if runtime.args.rate:
-                record_rate(runtime.start_dir, os.path.basename(runtime.start_dir), result, method=runtime.args.method)
+                record_rate(runtime.start_dir, os.path.basename(runtime.start_dir), result,
+                            method=runtime.args.method, note=note,
+                            basis_set=runtime.args.basis_set, reaction=radical_name())
+            if note:
+                logger.warning(note)
             logger.results(format_rate(result))
             exit()
 

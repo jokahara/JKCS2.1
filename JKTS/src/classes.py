@@ -68,6 +68,8 @@ class Molecule:
         self.status = None
         self.error_termination_count = 0
         self.node_failure_count = 0
+        self.crest_fallback_level = 0  # index into qc_input.CREST_FALLBACKS
+        self.crest_failed = False      # CREST gave up; continue without sampling
         self.reactant_pair = None
         self.product_pair = None
         self.reaction_path_degeneracy = 1  # σᵢ: equivalent H's this TS represents

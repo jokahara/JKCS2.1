@@ -212,6 +212,17 @@ def rate_constant(TS_conformers, reactant_conformers, product_conformers, T=298.
     return RateResult(sigma=symmetry, T=T)
 
 
+def radical_name():
+    return 'Cl' if runtime.args.Cl else 'NO3' if runtime.args.NO3 else 'OH'
+
+
+def crest_failure_note(TS_molecules):
+    # Flags channels whose conformer sampling was skipped after CREST gave up
+    if any(getattr(m, 'crest_failed', False) for m in TS_molecules):
+        return 'CREST conformer sampling failed; single-conformer estimate'
+    return ''
+
+
 def assemble_and_record_rate(TS_molecules):
     # Locate the finished reactant/product pickles for this TS channel directory,
     channel_name = os.path.basename(runtime.start_dir)
@@ -225,7 +236,11 @@ def assemble_and_record_rate(TS_molecules):
             final_reactants = Molecule.load_molecules_from_pickle(reactant_pkl_path)
             final_products = Molecule.load_molecules_from_pickle(product_pkl_path) if os.path.exists(product_pkl_path) else []
             result = rate_constant(TS_molecules, final_reactants, final_products, T=runtime.args.T, symmetry=symmetry)
-            record_rate(rates_dir, channel_name, result, method=runtime.args.method)
+            note = crest_failure_note(TS_molecules)
+            record_rate(rates_dir, channel_name, result, method=runtime.args.method, note=note,
+                        basis_set=runtime.args.basis_set, reaction=radical_name())
+            if note:
+                logger.warning(f"{channel_name}: {note}")
             logger.results(format_rate(result))
             return True
     logger.error(f"Could not find Final_reactants_{reactant_pkl_name}.pkl in ../reactants/ or ./reactants/")

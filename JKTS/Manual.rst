@@ -58,11 +58,11 @@ The input can also be given as a SMILES string with ``-smiles`` (e.g. ``JKTS -sm
 Each directory is self-contained and holds:
 
 - ``log`` — one timestamped log file recording state changes (submissions, running transitions, convergences, errors, step transitions).
-- ``.metadata`` — a hidden JSON file with the run settings: reaction type, method/basis set/backend, SLURM resources, the original command line, and (for TS directories) the active-site indexes and :math:`\sigma`.
+- ``.metadata`` — a hidden JSON file with the run settings: reaction type, method/basis set/backend, SLURM resources, the original command line, (for TS directories) the active-site indexes and :math:`\sigma`, and the CREST fallback state (``crest_fallback_level``, ``crest_sampling_failed``) if sampling had to be retried.
 - ``{dir}_checkpoint.pkl`` — a crash-safe checkpoint of all molecules in the directory, rewritten atomically at every state change.
 - ``input_files/``, ``log_files/``, ``failed_logs/``, ``slurm_output/`` — job artifacts sorted as the workflow progresses.
 
-Within each directory the workflow steps run as SLURM jobs. Conformer sampling uses the xtb program CREST [1]_ and results in a file named ``collection{molecule name}.pkl`` containing the sampled conformers; JKTS reads this file once it is created and generates input files for the next step. Geometry relaxations use the DFT method and basis set given by ``-method`` and ``-basis_set``. For transition state structures, every TS optimization is validated: the imaginary frequency must lie below ``-freq_cutoff`` (default -100 cm⁻¹) and its normal mode must correspond to hydrogen transfer at a geometrically sane active site; structures failing validation are corrected and resubmitted once before being dropped. Duplicate conformers are filtered out automatically with the ArbAlign program [4]_ after the constrained conformer optimization and after the DLPNO single points.
+Within each directory the workflow steps run as SLURM jobs. Conformer sampling uses the xtb program CREST [1]_ and results in a file named ``collection{molecule name}.pkl`` containing the sampled conformers; JKTS reads this file once it is created and generates input files for the next step. If CREST stops by itself instead (typically a trial metadynamics that will not converge, ``Automatic xtb restart failed``), JKTS retries it with progressively softer settings — a weaker constraint force constant, then ``--quick``, and finally GFN-FF metadynamics with GFN2 optimizations. If even the softest settings abort, the workflow does not lose the channel: the already optimized structure is carried on as the only conformer, and both the ``log`` and ``Rate_constants.txt`` mark that channel as a single-conformer estimate (its rate constant is a lower-quality number, since the MC-TST conformer sum ran over one structure). Geometry relaxations use the DFT method and basis set given by ``-method`` and ``-basis_set``. For transition state structures, every TS optimization is validated: the imaginary frequency must lie below ``-freq_cutoff`` (default -100 cm⁻¹) and its normal mode must correspond to hydrogen transfer at a geometrically sane active site; structures failing validation are corrected and resubmitted once before being dropped. Duplicate conformers are filtered out automatically with the ArbAlign program [4]_ after the constrained conformer optimization and after the DLPNO single points.
 
 The final step is an energy correction with DLPNO-CCSD(T) [2]_ [3]_ (or CCSD(T)-F12 with ``-F12``) on the optimized geometries. Using the thermochemical contributions of the optimized geometries and the DLPNO single-point energies, the rate constant of each abstraction channel is calculated with the MC-TST equation:
 
@@ -70,6 +70,18 @@ The final step is an energy correction with DLPNO-CCSD(T) [2]_ [3]_ (or CCSD(T)-
    k = \sigma \, \kappa \, \frac{k_b T}{h} \left( \frac{\sum_{i}^{\text{TS conf}} \exp\left(-\frac{\Delta E_i}{k_b T}\right) Q_{\text{TS},i}}{\sum_{j}^{\text{reac conf}} \exp\left(-\frac{\Delta E_j}{k_b T}\right) Q_{\text{reac},j}} \right) \exp\left(-\frac{E_{\text{TS},0} - E_{\text{R},0}}{k_b T}\right)
 
 where :math:`\sigma` is the reaction path degeneracy of the channel and :math:`\kappa` the Eckart tunneling coefficient. The results are written to ``molecules.txt`` (per-molecule summary), ``Final_reactants_*.pkl`` / ``Final_products_*.pkl`` / ``Final_TS_*.pkl`` (result pickles), and ``Rate_constants.txt`` (per-channel table with the total rate constant).
+
+``Rate_constants.txt`` is written next to the channel directories and rewritten every time a channel finishes, so it always shows every channel computed so far. Its header names the reacting molecule and oxidant, the DFT method and basis set, the temperature, the number of reactant conformers entering the denominator of the MC-TST sum, and when the file was last written. One row per channel then lists
+
+- ``sigma`` — the reaction path degeneracy :math:`\sigma_i` of the channel,
+- ``N_TS`` — how many TS conformers survived filtering and entered the numerator of the MC-TST sum (a channel showing ``1`` is a single-conformer estimate, not a converged conformer average),
+- ``Ea/kcal/mol`` — the zero-point corrected barrier,
+- ``kappa`` — the Eckart tunneling coefficient,
+- ``nu_imag/cm-1`` — the imaginary frequency of the lowest TS conformer, i.e. the barrier width that :math:`\kappa` was derived from,
+- ``k`` — the channel rate constant (or ``failed`` when energies were missing),
+- ``%`` — the branching ratio of the channel, :math:`k_i / \sum_j k_j`.
+
+Channels marked with ``*`` carry a footnote below the table. The same numbers, plus the partition functions :math:`Q_{TS}` and :math:`Q_{reac}`, are kept in machine-readable form in the hidden ``.rates.tsv`` next to it.
 
 The rate constant is evaluated at 298.15 K by default; another temperature can be requested with ``-T`` (in Kelvin). At a non-default temperature, the conformer partition functions are recomputed from the stored frequencies, rotational constants and masses, and the Eckart tunneling coefficient is evaluated at the same temperature. After a workflow has finished, the rate constant can be recomputed from the existing result pickles — for example at a new temperature — without running any new QC jobs, by executing ``JKTS -rate -T 250`` inside the TS channel directory (e.g. **CH4_H1**). This auto-locates ``Final_TS_*.pkl`` in the directory and the reactant/product pickles next to it, and rewrites ``Rate_constants.txt``. Recompute all channels at the same temperature so the total rate stays meaningful.
 
@@ -242,7 +254,8 @@ src/monitoring.py
 Job monitoring and workflow engine. Module constants: ``FILTER_STEPS`` (steps after which conformers are deduplicated), ``VANISHED_GRACE_POLLS`` and ``MAX_NODE_FAILURES`` (node-failure handling).
 
 - ``check_convergence()`` — the polling thread for QC steps: sweep the logs, classify each finished job (converged / error / TS-validation failure / vanished), resubmit or drop failures (two-error budget per molecule), checkpoint every state change, and advance the workflow when all jobs converged.
-- ``check_crest()`` — the polling thread for CREST jobs: wait for the ``collection*.pkl`` files, resubmitting jobs that vanish without producing them. A job that disappears without a ``collection*.pkl`` but whose ``.output`` contains a terminal CREST/xTB self-abort message (``crest_abort_reason()`` — e.g. metadynamics that will not converge) is given up on immediately with the real reason, rather than resubmitted (an identical resubmit would fail the same way and only burn the node-failure budget).
+- ``check_crest()`` — the polling thread for CREST jobs: wait for the ``collection*.pkl`` files, resubmitting jobs that vanish without producing them. A job that disappears without a ``collection*.pkl`` but whose ``.output`` contains a terminal CREST/xTB self-abort message (``crest_abort_reason()`` — e.g. metadynamics that will not converge) is not resubmitted unchanged (that would fail identically and only burn the node-failure budget); it goes through the CREST fallback ladder instead, see below.
+- ``retry_crest_after_abort()`` — the CREST failsafe. On a self-abort it archives the aborted ``.output`` into ``log_files/`` (so the next poll does not read the stale message), steps ``molecule.crest_fallback_level`` one rung down ``qc_input.CREST_FALLBACKS``, rewrites ``constrain.inp`` with the softer force constant, and resubmits. When the ladder is exhausted the molecule is marked ``crest_failed`` and ``_process_crest_output()`` carries the already optimized structure into the next step as the only conformer, so the channel still yields a rate constant (flagged as a single-conformer estimate in the log and in ``Rate_constants.txt``). Repeated node failures on a CREST job end the same way instead of abandoning the channel. The fallback level is stored on the molecule and in ``.metadata`` (``crest_fallback_level``, ``crest_sampling_failed``), so ``-restart`` continues down the ladder rather than repeating a run that already aborted.
 - ``handle_termination()`` — step-transition hub: advance converged molecules, run ArbAlign filtering after ``FILTER_STEPS``, prepare inputs via ``STEP_HANDLERS``, checkpoint and submit.
 - ``submit_and_monitor()`` — submit one job or an array, checkpoint the job id (so a crash can reattach), start the matching polling thread.
 - ``termination_status()`` / ``handle_error_termination()`` / ``resubmit_job()`` — log classification and error triage (G16 convergence errors resubmit from the last geometry, intervention errors are dropped for manual inspection, SCF failures at a good active site get a geometry repair first).
@@ -284,7 +297,8 @@ src/qc_input.py
 QC input file generation.
 
 - ``QC_input()`` — write the .com/.inp input for the current step: G16 or ORCA route per step type (constrained opt / TS opt / plain opt / DLPNO single point), frozen active-site coordinates when constrained, TS-mode and Hessian settings (tighter on retries), DLPNO memory escalation, F12 variant with ``-F12``.
-- ``crest_constrain()`` — write ``constrain.inp`` for a TS CREST run (C–H and H–X distances and the C–H–X angle fixed).
+- ``crest_constrain()`` — write ``constrain.inp`` for a TS CREST run (C–H and H–X distances and the C–H–X angle fixed). The force constant follows the molecule's CREST fallback level.
+- ``CREST_FALLBACKS`` / ``crest_fallback()`` / ``crest_fallback_exhausted()`` / ``describe_crest_fallback()`` — the CREST fallback ladder: level 0 is the normal run (force constant 1, ``--gfn2``), the next levels soften the constraints (0.5, then 0.25 with ``--quick``) and the last one runs the metadynamics with GFN-FF (``--gfn2//gfnff``, no SCF to diverge) while keeping GFN2 for the optimizations. ``submit_job()`` builds the CREST command line from the level, placing the fallback flags before the explicit ``--ewin``/``--tstep`` settings so those still win.
 - ``mkdir()`` — create a working directory with its subfolders and record the run settings in ``.metadata``.
 
 src/ts_validation.py
@@ -317,7 +331,9 @@ MC-TST rate constants with tunneling.
 src/results.py
 --------------
 
-Result formatting: ``RateResult`` (namedtuple with k, :math:`\kappa`, Ea, partition functions, :math:`\sigma`, T), ``format_rate()`` (the single canonical rate-constant string used in the log, on stdout and in ``Rate_constants.txt``), ``record_rate()`` (maintains the machine-readable ``.rates.tsv`` and rewrites the ``Rate_constants.txt`` summary), and ``write_molecule_summary()`` (``molecules.txt``).
+Result formatting: ``RateResult`` (namedtuple with k, :math:`\kappa`, Ea, partition functions, :math:`\sigma`, the conformer counts ``n_ts``/``n_reactant``, the imaginary frequency and T), ``format_rate()`` (the single canonical rate-constant string used in the log, on stdout and in ``Rate_constants.txt``), ``record_rate()`` (maintains the machine-readable ``.rates.tsv`` and rewrites the ``Rate_constants.txt`` summary), and ``write_molecule_summary()`` (``molecules.txt``).
+
+The ``.rates.tsv`` columns are addressed through the ``C_*`` index constants at the top of the module; new fields are appended at the end so that a ``.rates.tsv`` written by an older version still reads back, with the missing columns rendered as ``-``. ``_write_summary()`` takes header values (method, basis set, oxidant, reactant conformer count) from the first channel that carries them, for the same reason.
 
 src/output.py
 -------------

@@ -1,12 +1,15 @@
 import os
 import re
+import shutil
 import sys
 import time
 from threading import Thread
 
 from classes import Molecule, Step
 from slurm_submit import submit_job, submit_array_job, update_molecules_status, get_interval_seconds
-from qc_input import QC_input, crest_constrain
+from qc_input import (QC_input, crest_constrain, crest_fallback_exhausted,
+                      describe_crest_fallback, CREST_FALLBACKS)
+from metadata import update_metadata
 from conformer_tools import filter_molecules, energy_cutoff, initiate_conformers
 from ts_validation import check_transition_state, good_active_site
 import checkpoint
@@ -377,6 +380,52 @@ def crest_abort_reason(molecule):
     return None
 
 
+def _archive_crest_output(molecule):
+    # Move the aborted CREST output out of the way so the next poll does not
+    # read the old abort message and escalate again before the retry finishes.
+    source = os.path.join(molecule.directory, f"{molecule.name}.output")
+    if not os.path.exists(source):
+        return
+    dest_dir = os.path.join(molecule.directory, "log_files")
+    level = getattr(molecule, 'crest_fallback_level', 0)
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        destination = os.path.join(dest_dir, f"{molecule.name}_aborted_level{level}.output")
+        if os.path.exists(destination):
+            os.remove(destination)
+        shutil.move(source, destination)
+    except OSError:
+        pass
+
+
+def retry_crest_after_abort(molecule, reason, logger):
+    # CREST stopped by itself, so an identical resubmit fails identically:
+    # step down the fallback ladder and try again with softer settings.
+    # Returns False when the ladder is exhausted (molecule marked crest_failed).
+    level = getattr(molecule, 'crest_fallback_level', 0)
+    _archive_crest_output(molecule)
+    if crest_fallback_exhausted(level):
+        molecule.crest_failed = True
+        update_metadata(molecule.directory, crest_fallback_level=level, crest_sampling_failed=True)
+        logger.error(f"{molecule.name}: CREST still aborts with the softest settings ({reason}); "
+                     f"giving up on conformer sampling for this structure")
+        return False
+
+    molecule.crest_fallback_level = level + 1
+    crest_constrain(molecule)  # rewrites constrain.inp with the softer force constant
+    xyz_path = os.path.join(molecule.directory, f"{molecule.name}.xyz")
+    if not os.path.exists(xyz_path):
+        molecule.write_xyz_file(xyz_path)
+    job_id, _ = submit_job(molecule, runtime.args)
+    molecule.job_id = f"{job_id}"
+    molecule.status = 'pending'
+    update_metadata(molecule.directory, crest_fallback_level=molecule.crest_fallback_level)
+    logger.warning(f"{molecule.name}: CREST aborted on its own ({reason}); retrying with softer settings "
+                   f"[level {molecule.crest_fallback_level}/{len(CREST_FALLBACKS) - 1}: "
+                   f"{describe_crest_fallback(molecule.crest_fallback_level)}] as job {job_id}")
+    return True
+
+
 def _process_crest_output(molecules, logger, threads):
     all_conformers = []
     constrained_indexes = molecules[0].constrained_indexes
@@ -387,6 +436,23 @@ def _process_crest_output(molecules, logger, threads):
     method = molecules[0].method
 
     for molecule in molecules:
+        if getattr(molecule, 'crest_failed', False):
+            # Failsafe: CREST never produced an ensemble, so carry the optimized
+            # structure itself into the next step as the only conformer. The
+            # channel still contributes to the rate constant, but the MC-TST sum
+            # runs over one conformer only — flagged here and in the results.
+            logger.warning(f"{molecule.name.replace('_CREST', '')}: continuing without CREST conformer sampling; "
+                           f"the optimized structure is used as the only conformer "
+                           f"(MC-TST partition function is a single-conformer estimate)")
+            molecule.constrained_indexes = constrained_indexes
+            molecule.mult = mult
+            molecule.charge = charge
+            molecule.current_step = current_step
+            molecule.directory = dir
+            molecule.method = method
+            all_conformers.append(molecule)
+            molecule.move_inputfile()
+            continue
         try:
             conformers = initiate_conformers(crest_collection_path(molecule))
             logger.success(f"CREST sampling done: {len(conformers)} conformers generated for {molecule.name.replace('_CREST', '')}")
@@ -414,7 +480,6 @@ def check_crest(molecules, logger, threads, interval, max_attempts):
     sleeping = False
     last_pending = None
     crest_missing_polls = 0
-    expected_files = {os.path.basename(crest_collection_path(molecule)) for molecule in molecules}
 
     logger.info(f"Monitoring CREST sampling; first check in {initial_delay} seconds, then every {interval} seconds")
     time.sleep(initial_delay)
@@ -450,30 +515,53 @@ def check_crest(molecules, logger, threads, interval, max_attempts):
             attempts += 1
             continue
 
+        # Molecules that gave up on CREST are carried on without an ensemble,
+        # so only the ones still sampling need to produce a collection file.
+        expected_files = {os.path.basename(crest_collection_path(molecule))
+                          for molecule in molecules if not getattr(molecule, 'crest_failed', False)}
         if expected_files.issubset(files_in_directory):
             return _process_crest_output(molecules, logger, threads)
 
         # All jobs gone from the queue but the CREST output never appeared:
         # either the node died (resubmission can fix it) or CREST aborted
-        # deterministically (resubmission cannot), so distinguish the two.
+        # deterministically (an identical resubmit cannot fix that, but softer
+        # CREST settings may), so distinguish the two.
         if all(m.status == 'completed or not found' for m in molecules):
+            retried = False
             for molecule in molecules:
                 if os.path.basename(crest_collection_path(molecule)) in files_in_directory:
                     continue
+                if getattr(molecule, 'crest_failed', False):
+                    continue
                 reason = crest_abort_reason(molecule)
                 if reason:
-                    logger.error(f"{molecule.name}: CREST aborted deterministically ({reason}); resubmitting will not help. Giving up.")
-                    return False
+                    retried = retry_crest_after_abort(molecule, reason, logger) or retried
+            if retried:
+                checkpoint.save_checkpoint(molecules)
+                crest_missing_polls = 0
+                time.sleep(interval)
+                attempts += 1
+                continue
+            if all(getattr(m, 'crest_failed', False) or
+                   os.path.basename(crest_collection_path(m)) in files_in_directory for m in molecules):
+                # Every job is accounted for: nothing left to wait for
+                checkpoint.save_checkpoint(molecules)
+                return _process_crest_output(molecules, logger, threads)
             crest_missing_polls += 1
             if crest_missing_polls >= VANISHED_GRACE_POLLS:
                 crest_missing_polls = 0
                 for molecule in molecules:
                     if os.path.basename(crest_collection_path(molecule)) in files_in_directory:
                         continue
+                    if getattr(molecule, 'crest_failed', False):
+                        continue
                     molecule.node_failure_count = getattr(molecule, 'node_failure_count', 0) + 1
                     if molecule.node_failure_count > MAX_NODE_FAILURES:
-                        logger.error(f"{molecule.name}: CREST job vanished {MAX_NODE_FAILURES} times without producing results. Giving up.")
-                        return False
+                        molecule.crest_failed = True
+                        update_metadata(molecule.directory, crest_sampling_failed=True)
+                        logger.error(f"{molecule.name}: CREST job vanished {MAX_NODE_FAILURES} times without producing results; "
+                                     f"giving up on conformer sampling for this structure")
+                        continue
                     xyz_path = os.path.join(molecule.directory, f"{molecule.name}.xyz")
                     if not os.path.exists(xyz_path):
                         molecule.write_xyz_file(xyz_path)
@@ -736,7 +824,30 @@ def _reconcile_crest_group(group, logger, threads):
             threads.append(thread)
             thread.start()
             return
-    # 3) Nothing queued and no output → (re)submit CREST sampling
+    # 3) Nothing queued, but an aborted CREST output is on disk → step down the
+    #    fallback ladder (or give up on sampling) instead of repeating the run
+    aborted = [(m, crest_abort_reason(m)) for m in group
+               if not os.path.exists(crest_collection_path(m)) and not getattr(m, 'crest_failed', False)]
+    aborted = [(m, reason) for m, reason in aborted if reason]
+    if aborted:
+        retried = False
+        for m, reason in aborted:
+            retried = retry_crest_after_abort(m, reason, logger) or retried
+        checkpoint.save_checkpoint(group)
+        if retried:
+            thread = Thread(target=check_crest, args=(group, logger, threads, get_interval_seconds(group[0]), runtime.args.attempts))
+            threads.append(thread)
+            thread.start()
+        else:
+            _process_crest_output(group, logger, threads)
+        return
+
+    # 4) Sampling already given up on earlier → continue without an ensemble
+    if all(getattr(m, 'crest_failed', False) or os.path.exists(crest_collection_path(m)) for m in group):
+        _process_crest_output(group, logger, threads)
+        return
+
+    # 5) Nothing queued and no output → (re)submit CREST sampling
     logger.event("No CREST job queued and no CREST output found; submitting CREST sampling")
     for m in group:
         m.converged = False

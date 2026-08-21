@@ -9,7 +9,40 @@ from ts_validation import is_aldehyde
 from metadata import update_metadata
 
 
-def crest_constrain(molecule, force_constant=1):
+# Progressively softer CREST settings, tried in order when CREST aborts by
+# itself (a trial metadynamics that will not converge, see CREST_ABORT_SIGNATURES
+# in monitoring.py). Level 0 is the normal run; each further level relaxes the
+# constraints and, last, moves the metadynamics to GFN-FF (no SCF to diverge)
+# while keeping GFN2 for the optimizations.
+CREST_FALLBACKS = (
+    {'force_constant': 1.0,  'method': None,             'flags': ''},
+    {'force_constant': 0.5,  'method': None,             'flags': ''},
+    {'force_constant': 0.25, 'method': None,             'flags': '--quick'},
+    {'force_constant': 0.25, 'method': '--gfn2//gfnff',  'flags': '--quick'},
+)
+
+
+def crest_fallback(level):
+    return CREST_FALLBACKS[max(0, min(int(level), len(CREST_FALLBACKS) - 1))]
+
+
+def crest_fallback_exhausted(level):
+    return int(level) >= len(CREST_FALLBACKS) - 1
+
+
+def describe_crest_fallback(level):
+    fallback = crest_fallback(level)
+    parts = [f"force constant {fallback['force_constant']}"]
+    if fallback['method']:
+        parts.append(fallback['method'])
+    if fallback['flags']:
+        parts.append(fallback['flags'])
+    return ', '.join(parts)
+
+
+def crest_constrain(molecule, force_constant=None):
+    if force_constant is None:
+        force_constant = crest_fallback(getattr(molecule, 'crest_fallback_level', 0))['force_constant']
     if molecule.reactant or molecule.product:
         pass
     else:
