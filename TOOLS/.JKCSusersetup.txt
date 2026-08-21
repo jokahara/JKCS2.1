@@ -40,6 +40,8 @@ MODULE_ORCA="REPLACE_module_orca" #"module load OpenMPI/3.1.3-GCC-8.2.0-2.31.1" 
 # SBATCH 
 SBATCH_PREFIX="REPLACE_sbatch_prefix " #group sbatch requirment
 
+# Constraints generator for JKCS2_explore
+PATH_CONSTRAINTS="REPLACE_constraints "
 
 #########################
 ### WORKING DIRECTORY ###
@@ -753,7 +755,8 @@ function program_ORCA {
     if [ "$test" == ".pkl" ]; then program_JKQCpickle `echo $input | sed 's/\/\:EXTRACT\:\// /g' | awk '{print $1}'` -extract $base -xyz -noname; input=${base}.xyz; fi
     if [ -z "$MEMORY" ]; then MEMORY=4000mb; fi
     MEMinsert2=`echo $MEMORY | awk '{print tolower($0)}' | sed 's/mb//' | sed 's/gb/*1000/' | sed 's/tb/*1000000/'| bc`
-    MEMinsert1=`echo 0.75*$MEMinsert2 | bc` #it is said in ORCA manual
+    #MEMinsert1=`echo 0.75*$MEMinsert2 | bc` #it is said in ORCA manual
+    MEMinsert1=`echo $MEMinsert2`
     if [ -z "$CPU" ]; then CPU=1; fi
     if [ -z "$CHARGE" ]; then CHARGE=0; fi
     if [ -z "$MULTIPLICITY" ]; then MULTIPLICITY=1; fi

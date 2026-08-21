@@ -20,6 +20,7 @@ PATH_ORCA="/users/kubeckaj/ORCA/orca_4_2_0_linux_x86-64_shared_openmpi314/"
 MODULE_ORCA="module load intel/19.0.4 hpcx-mpi/2.4.0 intel-mkl/2019.0.4"
 EXTRA_ORCA_LINES=""
 MODULE_GCC="module load gcc"
+PATH_CONSTRAINTS=""
 SBATCH_PREFIX=""
 WRKDIR="./"
 
@@ -102,6 +103,26 @@ EXAMPLE:
     time2="10-00:00:00"
     queue1="q64,q48,q40,q36"
     queue2="q64,q48,q40,q36"
+    continue
+  fi
+  if [ "$i" == "roihu" ]
+  then
+    PYTHON="python3.10"                             #Please modify this and use python version >3.8.0 but <4.0.0
+    MODULE_PYTHON="module load python-data/3.10-06.07"    #Is there some module required to load python?
+    PATH_ABC="/users/kubeckaj/ABCluster-2.0-Linux/"
+    PATH_ABC3=$PATH_ABC"../ABCluster-3.1-Linux/"
+    MODULE_ABC="module load gcc"
+    PATH_XTB="/users/kubeckaj/XTB6.4/"
+    MODULE_XTB=""
+    PATH_CREST=""
+    PATH_G16="/appl/soft/manual/chem/x86_64/gaussian/G16RevC.02_bin/"
+    MODULE_G16="module load gaussian/G16RevC.02"
+    PATH_ORCA="/users/kubeckaj/ORCA/orca_6_1_1_linux_x86-64_shared_openmpi418_avx2/"
+    MODULE_ORCA="module load orca/6.1.1"
+    PATH_CONSTRAINTS="/projappl/project_2013866/interp_graphs_env_torch28/bin/"
+    project=`csc-projects | grep Project: | awk '{print $2}' | grep -v $USER | grep -v gaussian | head -n1`
+    SBATCH_PREFIX="--account=$project "
+    WRKDIR="./"
     continue
   fi
   if [ "$i" == "mahti" ]
@@ -346,6 +367,7 @@ then
     sed 's/REPLACE_queue1/'"$queue1"'/g' .help16 > .help17
     sed 's/REPLACE_queue2/'"$queue2"'/g' .help17 > .help18
     sed 's,REPLACE_gcc,'"$MODULE_GCC"',g' .help18 > .help19
+    sed 's,REPLACE_constraints,'"$PATH_CONSTRAINTS"',g' .help18 > .help19
     mv .help19 ~/.JKCSusersetup.txt
     rm .help*
     printf "${cfGREEN}Please, change all required user settings (e.g. paths) in file ~/.JKCSusersetup.txt${cfDEF}\n"
