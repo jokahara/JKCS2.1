@@ -114,7 +114,7 @@ EXAMPLE:
     MODULE_ABC="module load gcc"
     PATH_XTB="/projappl/hvehkama/kaharaja/Applications/xtb-6.6.1/"
     MODULE_XTB=""
-    PATH_CREST="/projappl/hvehkama/kaharaja/Applications/crest/"
+    PATH_CREST="/projappl/hvehkama/kaharaja/Applications/"
     PATH_G16="/appl/soft/manual/chem/x86_64/gaussian/G16RevC.02_bin/"
     MODULE_G16="module load gaussian/G16RevC.02"
     PATH_ORCA="/projappl/hvehkama/kaharaja/orca_6_1_1_linux_x86-64_shared_openmpi418_avx2/"
