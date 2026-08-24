@@ -108,21 +108,23 @@ EXAMPLE:
   if [ "$i" == "roihu" ]
   then
     PYTHON="python3.10"                             #Please modify this and use python version >3.8.0 but <4.0.0
-    MODULE_PYTHON="module load python-data/3.10-06.07"    #Is there some module required to load python?
-    PATH_ABC="/users/kubeckaj/ABCluster-2.0-Linux/"
-    PATH_ABC3=$PATH_ABC"../ABCluster-3.1-Linux/"
+    MODULE_PYTHON="module load python-data/3.10"    #Is there some module required to load python?
+    PATH_ABC="/projappl/hvehkama/kaharaja/Applications/ABCluster/"
+    PATH_ABC3="/projappl/hvehkama/kaharaja/Applications/ABCluster/"
     MODULE_ABC="module load gcc"
-    PATH_XTB="/users/kubeckaj/XTB6.4/"
+    PATH_XTB="/projappl/hvehkama/kaharaja/Applications/xtb-6.6.1/"
     MODULE_XTB=""
     PATH_CREST=""
     PATH_G16="/appl/soft/manual/chem/x86_64/gaussian/G16RevC.02_bin/"
     MODULE_G16="module load gaussian/G16RevC.02"
-    PATH_ORCA="/users/kubeckaj/ORCA/orca_6_1_1_linux_x86-64_shared_openmpi418_avx2/"
+    PATH_ORCA="/projappl/hvehkama/kaharaja/orca_6_1_1_linux_x86-64_shared_openmpi418_avx2/"
     MODULE_ORCA="module load orca/6.1.1"
-    PATH_CONSTRAINTS="/projappl/project_2013866/interp_graphs_env_torch28/bin/"
+    PATH_CONSTRAINTS="/projappl/project_2013866/interp_graphs_env/bin/"
     project=`csc-projects | grep Project: | awk '{print $2}' | grep -v $USER | grep -v gaussian | head -n1`
     SBATCH_PREFIX="--account=$project "
     WRKDIR="./"
+    queue1="small"
+    queue2="medium"
     continue
   fi
   if [ "$i" == "mahti" ]
