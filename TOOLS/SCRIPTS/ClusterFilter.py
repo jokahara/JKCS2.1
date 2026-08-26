@@ -1,5 +1,5 @@
-
 import os, sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__))+'/clusterfilter')
 
 def printhelp():
   print('   Use this file like this:')
