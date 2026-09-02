@@ -5,6 +5,7 @@ import sys
 import time
 
 from output import logger
+from qc_input import crest_fallback
 #########################################SUBMIT JOBS############################
 
 # Transient SLURM rejections that clear on their own as queued jobs drain.
@@ -180,12 +181,19 @@ def submit_job(molecule, args, nnodes=1):
     partition = args.par
     interval, slurm_time = compute_interval_and_walltime(molecule, args)
 
+    # Settings of the current CREST fallback level (level 0 = the normal run)
+    fallback = crest_fallback(getattr(molecule, 'crest_fallback_level', 0))
+    gfn_flag = fallback['method'] or f"--gfn{args.gfn}"
+    extra_flags = f" {fallback['flags']}" if fallback['flags'] else ''
+
+    # The fallback flags come first so the explicit settings below still win
+    # (--quick and friends reset the energy window and MD defaults)
     if molecule.reactant:
-        crest_input = f"{molecule.name}.xyz --gfn{args.gfn} --ewin {args.ewin} --noreftopo --tstep 1"
+        crest_input = f"{molecule.name}.xyz {gfn_flag}{extra_flags} --ewin {args.ewin} --noreftopo --tstep 1"
     elif molecule.product:
-        crest_input = f"{molecule.name}.xyz --gfn{args.gfn} --ewin {args.ewin} --noreftopo --uhf 1 --tstep 1"
+        crest_input = f"{molecule.name}.xyz {gfn_flag}{extra_flags} --ewin {args.ewin} --noreftopo --uhf 1 --tstep 1"
     else:
-        crest_input = f"{molecule.name}.xyz --gfn{args.gfn} --ewin {args.ewin} --noreftopo --uhf 1 --tstep 1 --cinp {dir}/constrain.inp"
+        crest_input = f"{molecule.name}.xyz {gfn_flag}{extra_flags} --ewin {args.ewin} --noreftopo --uhf 1 --tstep 1 --cinp {dir}/constrain.inp"
 
     if molecule.program.lower() == "orca" or molecule.program.lower() == "g16":
         if molecule.current_step == 'DLPNO':
