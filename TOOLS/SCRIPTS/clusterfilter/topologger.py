@@ -206,12 +206,13 @@ def filter_isomers(clusters_df: DataFrame, cluster_info: ClusterInfo):
     log = clusters_df['temp'][['SMILES']]
     log.index = np.arange(len(log))
     passed = np.repeat(True, len(clusters_df))
-    isomer_smiles = np.concatenate(cluster_info.isomers)
-        
     for i, smiles in enumerate(log['SMILES'].values):
-        passed[i] &= np.all([smi in isomer_smiles for smi in smiles.split('.')])
+        for isomer_smiles, smi in zip(cluster_info.isomers, smiles.split('.')):
+            if isomer_smiles is not None:
+                passed[i] &= smi in isomer_smiles
         
     return passed        
+
 
 def filter_isomorphs(clusters_df: DataFrame, cluster_info: ClusterInfo, 
                      used_DA_pairs: Union[Iterable, None ]= None, el=('log','electronic_energy')):

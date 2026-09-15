@@ -213,7 +213,7 @@ if ( count == 0 ):
     exit()
 
 ###############################################################################
-from clusterfilter.filter import ClusterFilter
+from filter import ClusterFilter
 from time import time
 
 t = time()
