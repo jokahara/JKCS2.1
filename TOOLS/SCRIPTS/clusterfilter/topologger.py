@@ -30,9 +30,7 @@ def get_ranks(mol_df):
     return True
 
 def clusters_to_smiles(clusters_df: DataFrame, 
-                       components: Iterable[str], 
-                       mol_df: dict[str, MolInfo], 
-                       return_isomers: bool = False, 
+                       cluster_info: ClusterInfo,
                        return_sorted: bool = True
     ) -> Union[list[str], DataFrame]:
     # make sure rdkit is available
@@ -45,10 +43,10 @@ def clusters_to_smiles(clusters_df: DataFrame,
         print('Error! rdkit not found. Halting...')
         exit()
 
-    n = len(components)
-    n_atoms = [mol_df[k].size for k in components]
+    n = cluster_info.size
+    n_atoms = cluster_info.component_sizes
     # SMILES patterns corresponding to the molecules
-    smiles = [mol_df[k].smiles for k in components]
+    smiles = cluster_info.smiles #[mol_df[k].smiles for k in components]
     
     # create initial Mol objects
     mols = []
@@ -77,7 +75,6 @@ def clusters_to_smiles(clusters_df: DataFrame,
         EmbedMolecule(m, params)
         
     xyz = clusters_df[('xyz', 'structure')].values
-    names = clusters_df[('info', 'file_basename')].values
     # split clusters into monomers = [[monA_1,...], [monB_1,...], ...]
     monomers = [[]]*n
     s = 0
@@ -112,28 +109,17 @@ def clusters_to_smiles(clusters_df: DataFrame,
     #print(np.unique(stereo_smiles, return_counts=True))
     # we can assume that chirality has no effect on binding energy
     #stereo_smiles = [CanonSmiles(smi.replace('@@','@').replace('[C@H]','C')).replace('[C@]','C') for smi in stereo_smiles]
+    
+    if n == 1:
+        return stereo_smiles
+    s = int(len(stereo_smiles)/n)
+    if return_sorted:
+        # smiles are sorted so that A.B == B.A
+        cluster_smiles = ['.'.join(np.sort(smi)) for smi in np.reshape(stereo_smiles, (n, s)).T]
+    else:
+        cluster_smiles = ['.'.join(smi) for smi in np.reshape(stereo_smiles, (n, s)).T]
 
-    if return_isomers:
-        # create new dataframe
-        names = list(names)*n
-        components = np.repeat(components, len(clusters_df))
-        xyz = monomers[0]
-        for m in monomers[1:]:
-            xyz += m
-
-        df = DataFrame(data={'parent': names, 'component': components, 'xyz': xyz, 'SMILES': stereo_smiles})
-        return df
-    else: 
-        if n == 1:
-            return stereo_smiles
-        s = int(len(stereo_smiles)/n)
-        if return_sorted:
-            # smiles are sorted so that A.B == B.A
-            cluster_smiles = ['.'.join(np.sort(smi)) for smi in np.reshape(stereo_smiles, (n, s)).T]
-        else:
-            cluster_smiles = ['.'.join(smi) for smi in np.reshape(stereo_smiles, (n, s)).T]
-
-        return cluster_smiles
+    return cluster_smiles
     
 def tag_atoms(mol, offset=0):
     for i, atom in enumerate(mol.GetAtoms()):
@@ -146,9 +132,10 @@ def generate_rdkit_cluster(smiles, tag_atoms: bool=False, return_parts: bool=Fal
     from functools import reduce
 
     # redefining nitro groups so that Os are interchangeable
-    smiles = [smi.replace('N(=O)(=O)', 'N([O])([O])') for smi in smiles]
+    smiles = [smi.replace('N(=O)(=O)', 'N([O])([O])')
+                 .replace('[N+]([O-])=O', 'N([O])([O])') for smi in smiles]
+    
     # generating molecules separately and adding hydrogens
-
     mols = []
     for smi in smiles:
         if smi.endswith('.mol'):
@@ -219,10 +206,7 @@ def filter_isomers(clusters_df: DataFrame, cluster_info: ClusterInfo):
     log = clusters_df['temp'][['SMILES']]
     log.index = np.arange(len(log))
     passed = np.repeat(True, len(clusters_df))
-
-    isomer_smiles = []
-    for smi in  cluster_info.isomers:
-        isomer_smiles = np.append(isomer_smiles, smi)
+    isomer_smiles = np.concatenate(cluster_info.isomers)
         
     for i, smiles in enumerate(log['SMILES'].values):
         passed[i] &= np.all([smi in isomer_smiles for smi in smiles.split('.')])

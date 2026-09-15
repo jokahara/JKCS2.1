@@ -70,6 +70,7 @@ class ClusterInfo:
     size: int
     charge: int
     components: Iterable[str] # 5sa = [sa-1,sa-1,sa,sa,sa]
+    component_sizes: Iterable[int]
     atoms: DataFrame
     bonds: DataFrame
     donors: Iterable[dict]
@@ -112,19 +113,15 @@ def construct_cluster(mol_df: dict[str, MolInfo],
 
         smiles.append(mol_info.smiles)
     
-    if cluster_size > 1:
-        cluster = concat(cluster)
-    else:
-        cluster = cluster[0]
+    cluster = concat(cluster) if cluster_size > 1 else cluster[0]
     
     for smi in smiles:
         if smi==None:
             smiles = None
             break
 
-    cluster_info = ClusterInfo(len(components), total_charge, components, cluster, bonds, 
-                                donors,  acceptors, smiles)
-
+    cluster_info = ClusterInfo(len(components), total_charge, components, [mol_df[k].size for k in components],
+                               cluster, bonds, donors,  acceptors, smiles)
     return cluster_info
 
 def select_fraction(cluster_info: ClusterInfo, counts, reacted, options, frac=0.0):

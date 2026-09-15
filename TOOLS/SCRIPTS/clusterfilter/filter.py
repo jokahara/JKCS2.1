@@ -1,3 +1,4 @@
+import os 
 import numpy as np
 from pandas import DataFrame
 from typing import Callable, Iterable, Optional, Union
@@ -391,22 +392,29 @@ class ClusterFilter(ClusterData):
             if len(subset) == 0:
                 continue
             self.clusters_df.loc[subset, ('temp', 'SMILES')] =\
-                clusters_to_smiles(self.clusters_df.loc[subset], self._components[ct], self.mol_df)
+                clusters_to_smiles(self.clusters_df.loc[subset], self.cluster_info(ct), self.mol_df)
             
         self.file_iso = selected_isomers_file
         if isinstance(self.file_iso, str):
-            from topologger import filter_isomers
-            
-            self._isomers_df = read_pickled_data(self.file_iso)
-            for k in self.mol_df.keys():
-                subset = self._isomers_df[self._isomers_df[('info','cluster_type')]=='1'+k]
-                if len(subset) > 0:
-                    self.mol_df[k].isomers = clusters_to_smiles(subset, [k], self.mol_df)
-            
+            if not os.path.isfile(self.file_in):
+                print('Error! Isomer file '+self.file_in+' not found.');exit()
+
+            # Temporary filter to extract monomers isomers
+            isomers_cf = ClusterFilter(self.file_iso, mol_file=self.mol_file)
+            isomers_df = isomers_cf.get_unique_isomers()
+
+            # Add smiles to MolInfos
+            for ct, (c, ) in isomers_cf.components.items():
+                smiles = isomers_df[isomers_df[('info', 'cluster_type')]==ct][('temp', 'SMILES')].values
+                if len(smiles) > 0:
+                    self.mol_df[c].isomers = smiles
+
+            # Add smiles to ClusterInfos
             for cluster_info in self._cluster_info.values():
                 iso_smiles = [self.mol_df[k].isomers for k in cluster_info.components]
                 cluster_info.isomers = iso_smiles
 
+            from topologger import filter_isomers
             self._filter(filter_isomers, self._cluster_info)
         else:
             self._isomers_df = None
@@ -429,7 +437,7 @@ class ClusterFilter(ClusterData):
                 if len(used) > 0:
                     f, _, used_topologies, _ = test_Hbonds(used, self._cluster_info[ct], 
                                                            self._rel_tol, bond_limits=self._Hbond_limits,
-                                                           options=self._Hbond_options,)
+                                                           options=self._Hbond_options)
                     self._used_pairs[ct] = np.array(used_topologies, dtype=tuple)[f]
 
             # filter unique topologies and remove already found topologies 
@@ -461,6 +469,18 @@ class ClusterFilter(ClusterData):
             f.writelines(self._lines[passed])
 
         return 
+    
+    def get_unique_isomers(self) -> DataFrame:
+        self.reset()
+        self.Hbonded(100, 'X')
+        self.topology()
+
+        isomers_df = self.get_filtered_data(return_temp=True)
+        if ('log', 'gibbs_free_energy') in isomers_df.columns:
+            isomers_df = isomers_df.sort_values(by=[('log', 'gibbs_free_energy'), ('log', 'electronic_energy')])
+        if ('log', 'electronic_energy') in isomers_df.columns:
+            isomers_df = isomers_df.sort_values(by=('log', 'electronic_energy'))
+        return isomers_df.drop_duplicates(('temp', 'SMILES'))
     
     def get_binding_energies(self, high_df: str=None):
         self.Hbonded(100, rel_tol=0.3)
@@ -509,11 +529,9 @@ class ClusterFilter(ClusterData):
         results[results.columns[1:-1]] = 627.5 * results[results.columns[1:-1]].astype(float)
 
         return results
-    
 
-    def print_statistics():
-
-        return
+        
+        
 
 if __name__ == '__main__':
     cf = ClusterFilter(['lowest.pkl', 'DADBsa_UMA.pkl'])
