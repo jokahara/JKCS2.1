@@ -31,7 +31,7 @@ def get_ranks(mol_df):
 
 def clusters_to_smiles(clusters_df: DataFrame, 
                        cluster_info: ClusterInfo,
-                       return_sorted: bool = True
+                       return_sorted: bool = False
     ) -> Union[list[str], DataFrame]:
     # make sure rdkit is available
     try:
@@ -212,7 +212,6 @@ def filter_isomers(clusters_df: DataFrame, cluster_info: ClusterInfo):
                 passed[i] &= smi in isomer_smiles
         
     return passed        
-
 
 def filter_isomorphs(clusters_df: DataFrame, cluster_info: ClusterInfo, 
                      used_DA_pairs: Union[Iterable, None ]= None, el=('log','electronic_energy')):

@@ -392,7 +392,7 @@ class ClusterFilter(ClusterData):
             if len(subset) == 0:
                 continue
             self.clusters_df.loc[subset, ('temp', 'SMILES')] =\
-                clusters_to_smiles(self.clusters_df.loc[subset], self.cluster_info(ct), self.mol_df)
+                clusters_to_smiles(self.clusters_df.loc[subset], self.cluster_info(ct))
             
         self.file_iso = selected_isomers_file
         if isinstance(self.file_iso, str):
