@@ -127,9 +127,11 @@ class ClusterFilter(ClusterData):
 
         if len(not_found) == 1:
             print("Warning: Molecule "+not_found[0]+" was not found in "+self.mol_file)
+        elif len(not_found) > 5:
+            print("Warning: Molecules "+not_found[0]+',..., '+not_found[-1]+" were not found in "+self.mol_file)
         elif len(not_found) > 1:
             print("Warning: Molecules "+','.join(not_found)+" were not found in "+self.mol_file)
-
+        
 
     def read_cluster_data(self, file_in = None) -> DataFrame:
         super().read_cluster_data(file_in)
@@ -401,7 +403,8 @@ class ClusterFilter(ClusterData):
 
             # Temporary filter to extract monomers isomers
             isomers_cf = ClusterFilter(self.file_iso, mol_file=self.mol_file)
-            isomers_df = isomers_cf.get_unique_isomers()
+            uq = np.unique(self.components.values())
+            isomers_df = isomers_cf.get_unique_isomers(uq)
 
             # Add smiles to MolInfos
             for ct, (c, ) in isomers_cf.components.items():
@@ -470,8 +473,13 @@ class ClusterFilter(ClusterData):
 
         return 
     
-    def get_unique_isomers(self) -> DataFrame:
+    def get_unique_isomers(self, extract=None) -> DataFrame:
         self.reset()
+        self.monomers()
+
+        if extract is not None:
+            self.extract_clusters(extract)
+        
         self.Hbonded(100, 'X')
         self.topology()
 
@@ -483,18 +491,26 @@ class ClusterFilter(ClusterData):
         return isomers_df.drop_duplicates(('temp', 'SMILES'))
     
     def get_binding_energies(self, high_df: str=None):
-        self.Hbonded(100, rel_tol=0.3)
+        # 1. Extract monomers
+        self.monomers()
+        self.Hbonded(100, 'X', rel_tol=0.3)
         # TODO: ('out', 'gibbs_free_energy')
         self.topology(sort_by=('log', 'gibbs_free_energy')) # determines cluster SMILES
+
+        monomers = self.get_filtered_data(True).sort_values(by=[('log', 'gibbs_free_energy'), ('log', 'electronic_energy')])
+        monomers = monomers.drop_duplicates(subset=[('temp', 'SMILES')])
+
+        self.reset()
+        # 2. Extract clusters
+        self.monomers(False)
+        self.Hbonded(100, rel_tol=0.3)
+        self.topology(sort_by=('log', 'gibbs_free_energy')) 
+
         # TODO: select(1) by smiles
         columns = ['Cluster', 'Delta-E', 'Delta-G']
         #if isinstance(high, str):
         #    columns += ['High DE', 'Corrected DG']
         columns += ['SMILES']
-
-        monomers_idx = np.concatenate([self._cluster_subsets[ct] for ct in self.cluster_types if len(self._components[ct]) == 1])
-        monomers = self.clusters_df.loc[monomers_idx].sort_values(by=[('log', 'gibbs_free_energy'), ('log', 'electronic_energy')])
-        monomers = monomers.drop_duplicates(subset=[('temp', 'SMILES')])
 
         results = DataFrame(columns=columns)
         for ct in self.cluster_types:
